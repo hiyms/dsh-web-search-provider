@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { buildAnthropicWireBody, buildWireBody, flattenText, serializeMessage, shortHash, splitCallId, wireTools } from '../../src/serialize.ts'
+import { buildAnthropicWireBody, buildWireBody, flattenText, pairedToolCallIds, serializeMessage, shortHash, splitCallId, wireTools } from '../../src/serialize.ts'
 import { RESPONSES_WEB_SEARCH_TOOL_TYPE } from '../../src/plan.ts'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import { markAgentLoopRequest } from '@deepseek-ai/dsh-llm'
@@ -50,6 +50,22 @@ describe('serializeMessage', () => {
     expect(result).toEqual([{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }])
   })
 
+  describe('pairedToolCallIds', () => {
+    it('keeps only call ids with both replay halves', () => {
+      const messages = [
+        message('assistant', [
+          { type: 'tool-call', id: 'call_paired|fc_1', name: 'bash', arguments: '{}' },
+          { type: 'tool-call', id: 'call_orphan|fc_2', name: 'web_search', arguments: '{}' },
+        ]),
+        message('user', [
+          { type: 'tool-result', toolCallId: 'call_paired|fc_1', content: [{ type: 'text', text: 'ok' }] },
+          { type: 'tool-result', toolCallId: 'call_result_only|fc_3', content: [{ type: 'text', text: 'stale' }] },
+        ]),
+      ]
+      expect([...pairedToolCallIds(messages)]).toEqual(['call_paired'])
+    })
+  })
+
   it('serializes tool results as function_call_output', () => {
     const result = serializeMessage(message('user', [{ type: 'tool-result', toolCallId: 'call_00_abc|fc_1', content: [{ type: 'text', text: '42' }] }]))
     expect(result).toEqual([{ type: 'function_call_output', call_id: 'call_00_abc', output: '42' }])
@@ -87,6 +103,25 @@ describe('serializeMessage', () => {
       arguments: '{"cmd":"ls"}',
       status: 'completed',
     })
+  })
+
+  it('maps invalid replay item ids to stable short ids', () => {
+    const itemId = 'tool call/with invalid characters'
+    const result = serializeMessage(message('assistant', [{ type: 'tool-call', id: `call_00_abc|${itemId}`, name: 'bash', arguments: '{}' }]))
+
+    expect(result[0]).toMatchObject({
+      call_id: 'call_00_abc',
+      id: `fc_${shortHash(itemId)}`,
+    })
+  })
+
+  it('maps oversized replay item ids to stable short ids', () => {
+    const itemId = `fc_${'a'.repeat(62)}`
+    const result = serializeMessage(message('assistant', [{ type: 'tool-call', id: `call_00_abc|${itemId}`, name: 'bash', arguments: '{}' }]))
+    const replayItemId = (result[0] as { id: string }).id
+
+    expect(replayItemId).toBe(`fc_${shortHash(itemId)}`)
+    expect(replayItemId.length).toBeLessThanOrEqual(64)
   })
 
   it('throws UnsupportedContentError on image content', () => {
@@ -177,6 +212,28 @@ describe('buildWireBody', () => {
     expect(body.include).toBeUndefined()
     expect(body.max_output_tokens).toBeUndefined()
     expect(body.prompt_cache_key).toBeUndefined()
+  })
+
+  it('drops orphaned replay calls and results while preserving paired calls', () => {
+    const request = markAgentLoopRequest({
+      provider: 'p',
+      model: 'm',
+      messages: [
+        message('assistant', [
+          { type: 'tool-call', id: 'call_paired|fc_1', name: 'bash', arguments: '{}' },
+          { type: 'tool-call', id: 'call_orphan|fc_2', name: 'web_search', arguments: '{}' },
+        ]),
+        message('user', [
+          { type: 'tool-result', toolCallId: 'call_paired|fc_1', content: [{ type: 'text', text: 'ok' }] },
+          { type: 'tool-result', toolCallId: 'call_result_only|fc_3', content: [{ type: 'text', text: 'stale' }] },
+        ]),
+      ],
+    })
+    const body = buildWireBody(request, { includeSources: false, stripServerTools: true }, 'm', 'web_search') as {
+      input: Array<{ type?: string; call_id?: string }>
+    }
+    expect(body.input.filter(item => item.type === 'function_call').map(item => item.call_id)).toEqual(['call_paired'])
+    expect(body.input.filter(item => item.type === 'function_call_output').map(item => item.call_id)).toEqual(['call_paired'])
   })
 })
 

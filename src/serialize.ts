@@ -59,12 +59,14 @@ export function flattenText(content: readonly ContentBlock[]): string {
  * @returns the wire input items; may be empty for content-free messages.
  * @throws UnsupportedContentError for image content.
  */
-export function serializeMessage(message: Message): unknown[] {
+export function serializeMessage(message: Message, pairedCallIds?: ReadonlySet<string>): unknown[] {
   if (message.role === 'user') {
     if (message.content.some(block => block.type === 'image')) {
       throw new UnsupportedContentError('image content')
     }
-    const toolResults = message.content.filter(block => block.type === 'tool-result')
+    const toolResults = message.content
+      .filter(block => block.type === 'tool-result')
+      .filter(result => pairedCallIds === undefined || pairedCallIds.has(splitCallId(result.toolCallId).callId))
     if (toolResults.length > 0) {
       return toolResults.map(result => ({
         type: 'function_call_output',
@@ -72,6 +74,7 @@ export function serializeMessage(message: Message): unknown[] {
         output: (result.isError === true ? '[Error] ' : '') + (flattenText(result.content) || '(no output)'),
       }))
     }
+    if (message.content.some(block => block.type === 'tool-result') && flattenText(message.content).length === 0) return []
     return [{ role: 'user', content: [{ type: 'input_text', text: flattenText(message.content) }] }]
   }
   if (message.role === 'system') {
@@ -98,10 +101,12 @@ export function serializeMessage(message: Message): unknown[] {
       })
     } else if (block.type === 'tool-call') {
       const { callId, itemId } = splitCallId(block.id)
+      if (pairedCallIds !== undefined && !pairedCallIds.has(callId)) continue
+      const replayItemId = /^fc_[A-Za-z0-9_-]{1,61}$/.test(itemId) ? itemId : `fc_${shortHash(itemId)}`
       items.push({
         type: 'function_call',
         call_id: callId,
-        id: itemId.startsWith('fc_') ? itemId : `fc_${itemId}`,
+        id: replayItemId,
         name: block.name,
         arguments: block.arguments,
         status: 'completed',
@@ -109,6 +114,24 @@ export function serializeMessage(message: Message): unknown[] {
     }
   }
   return items
+}
+
+/**
+ * Return call ids that have both an assistant function call and a user tool
+ * result. Responses rejects either half when replayed alone, which can happen
+ * when a prior provider/tool failure ended the step before persistence wrote
+ * the matching result.
+ */
+export function pairedToolCallIds(messages: readonly Message[]): ReadonlySet<string> {
+  const calls = new Set<string>()
+  const results = new Set<string>()
+  for (const message of messages) {
+    for (const block of message.content) {
+      if (block.type === 'tool-call') calls.add(splitCallId(block.id).callId)
+      if (block.type === 'tool-result') results.add(splitCallId(block.toolCallId).callId)
+    }
+  }
+  return new Set([...calls].filter(callId => results.has(callId)))
 }
 
 /** Function-tool names shadowed by server-side web tools; stripped from the wire. */
@@ -152,6 +175,7 @@ export function buildWireBody(
   webSearchToolType: ResponsesWebSearchToolType,
 ): unknown {
   const input: unknown[] = []
+  const pairedCalls = pairedToolCallIds(request.messages)
   if (request.system !== undefined && request.system.length > 0) {
     // The OpenCode Zen/Go gateway projects a `system` role input onto the
     // model's instruction slot, which turns server-side web_search calls
@@ -161,7 +185,7 @@ export function buildWireBody(
     // system-history mapping — to keep the gateway on its native path.
     input.push({ role: 'user', content: [{ type: 'input_text', text: request.system }] })
   }
-  for (const message of request.messages) input.push(...serializeMessage(message))
+  for (const message of request.messages) input.push(...serializeMessage(message, pairedCalls))
   return {
     model,
     input,
