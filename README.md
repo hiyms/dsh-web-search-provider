@@ -93,6 +93,7 @@ Settings section `web-search-provider` (a live namespace: edits reach the next r
 
 ## Known limitations
 
+- DSH `0.1.1-rc.2` and the `0.1.2-alpha.2` development line are supported; the plugin adapts to either settings registration API.
 - For providers that use the Response API / Message API **but do not provide a search capability**, the session **errors on first use**. Keep sending messages / open a new session and DSH keeps working without this plugin's capability.
 - When the AI uses this plugin's web search capability, there is **no visible search-call UI**. The usage may appear as multiple consecutive thinking segments, with the tail of a thinking segment containing something like "*Let me make search queries*".
 

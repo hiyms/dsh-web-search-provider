@@ -12,6 +12,8 @@ import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm
 import { markAgentLoopRequest } from '@deepseek-ai/dsh-llm'
 import type { Context } from '@deepseek-ai/cordis'
 
+vi.mock('@deepseek-ai/dsh-settings', () => ({ installSettingsSection: undefined }))
+
 interface FakeRuntime {
   ctx: Context
   listener: ((request: GenerateOptions, next: () => unknown) => unknown) | undefined
@@ -19,6 +21,7 @@ interface FakeRuntime {
   settingsDocument: Record<string, unknown>
   /** The registered prompt section object (name + dynamic text provider). */
   promptSection: { name: string; text: () => string } | undefined
+  installedSettingsSections: string[]
   /** Commit a change to one settings namespace, as the settings service would. */
   triggerSettingsChange(ns: string): void
 }
@@ -35,11 +38,13 @@ const config: InlineConfig = {
 
 interface FakeSettings {
   settings: unknown
+  installedSections: string[]
   triggerChange(ns: string): void
 }
 
 function fakeSettings(document: Record<string, unknown>): FakeSettings {
   const watchers = new Map<string, () => void>()
+  const installedSections: string[] = []
   const settings = {
     get: (ns: unknown) => document[String(ns)],
     register: (ns: unknown, schema: (value: unknown) => unknown, options?: { base?: unknown }) => {
@@ -56,8 +61,21 @@ function fakeSettings(document: Record<string, unknown>): FakeSettings {
         replace: async () => undefined,
       }
     },
+    installSection: (
+      _owner: Context,
+      ns: unknown,
+      schema: (value: unknown) => unknown,
+      entry: unknown,
+      hooks: { setSource(source: () => unknown): void; onChange(): void },
+    ) => {
+      installedSections.push(String(ns))
+      const scope = settings.register(ns, schema, { base: entry })
+      hooks.setSource(scope.get)
+      hooks.onChange()
+      scope.watch(hooks.onChange)
+    },
   }
-  return { settings, triggerChange: (ns) => watchers.get(ns)?.() }
+  return { settings, installedSections, triggerChange: (ns) => watchers.get(ns)?.() }
 }
 
 /** Mutable default-model selection; `current: null` simulates an unsettled
@@ -124,8 +142,8 @@ function buildRuntime(
       return () => { if (typeof disposer === 'function') disposer() }
     },
   }
-  // Attach store entries as context properties so services like
-  // installSettingsSection can access them as `sctx.settings`.
+  // Attach store entries as context properties so injected service contexts
+  // expose the same property API as the Harness runtime.
   for (const [name, service] of store) (ctx as Record<string, unknown>)[name] = service
   // `listener` must be a live binding: it is assigned by ctx.on when apply
   // runs, after this object is constructed, so a snapshot would stay undefined.
@@ -133,6 +151,7 @@ function buildRuntime(
     ctx: ctx as unknown as Context,
     get listener() { return listener },
     sectionNames,
+    installedSettingsSections: fake.installedSections,
     settingsDocument,
     get promptSection() { return promptSection },
     triggerSettingsChange: (ns) => fake.triggerChange(ns),
@@ -161,6 +180,12 @@ afterEach(() => {
 })
 
 describe('web-search-provider apply', () => {
+  it('uses the settings provider instance API when legacy helpers are absent', () => {
+    const runtime = buildRuntime()
+    apply(runtime.ctx, config)
+    expect(runtime.installedSettingsSections).toEqual([WEB_SEARCH_SETTINGS_NAMESPACE])
+  })
+
   it('registers an llm/stream listener and the prompt section', () => {
     const runtime = buildRuntime()
     apply(runtime.ctx, config)

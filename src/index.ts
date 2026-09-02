@@ -14,7 +14,8 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { isAgentLoopRequest } from '@deepseek-ai/dsh-llm'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import * as dshSettings from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { resolveCandidates, sameCandidates, SearchPlan } from './plan.ts'
 import type { PlanConfig, SearchPlanCandidate } from './plan.ts'
@@ -34,11 +35,61 @@ export const name = 'web-search-provider'
 export const inject = ['llm', 'systemPrompt', 'settings', 'credentials']
 
 /** Settings namespace carrying this plugin's section. */
-export const WEB_SEARCH_SETTINGS_NAMESPACE = settingsNamespace('web-search-provider')
+export const WEB_SEARCH_SETTINGS_NAMESPACE = 'web-search-provider' as SettingsNamespace
 
 /** Schema of the plugin's settings section, exported for composition consumers. */
 export { Config } from './config.ts'
 export type { InlineConfig } from './config.ts'
+
+interface SettingsSectionHooks {
+  setSource(source: () => InlineConfig): void
+  onChange(): void
+}
+
+interface InstanceSettingsInstaller {
+  installSection(
+    owner: Context,
+    namespace: SettingsNamespace,
+    schema: typeof Config,
+    entry: InlineConfig,
+    hooks: SettingsSectionHooks,
+  ): void
+}
+
+interface LegacySettingsModule {
+  installSettingsSection?(
+    owner: Context,
+    namespace: SettingsNamespace,
+    schema: typeof Config,
+    entry: InlineConfig,
+    hooks: SettingsSectionHooks,
+  ): void
+}
+
+function isInstanceSettingsInstaller(value: unknown): value is InstanceSettingsInstaller {
+  return typeof value === 'object'
+    && value !== null
+    && 'installSection' in value
+    && typeof value.installSection === 'function'
+}
+
+function installWebSearchSettings(
+  ctx: Context,
+  config: InlineConfig,
+  hooks: SettingsSectionHooks,
+): void {
+  const legacyInstaller = (dshSettings as LegacySettingsModule).installSettingsSection
+  if (legacyInstaller !== undefined) {
+    legacyInstaller(ctx, WEB_SEARCH_SETTINGS_NAMESPACE, Config, config, hooks)
+    return
+  }
+  ctx.inject(['settings'], (settingsCtx) => {
+    if (!isInstanceSettingsInstaller(settingsCtx.settings)) {
+      throw new Error('web-search-provider: settings service does not support section installation')
+    }
+    settingsCtx.settings.installSection(ctx, WEB_SEARCH_SETTINGS_NAMESPACE, Config, config, hooks)
+  })
+}
 
 /**
  * Register the inline short-circuit. The plan (candidates plus probe
@@ -91,7 +142,7 @@ export function apply(ctx: Context, config: InlineConfig): void {
     return currentPlan
   }
 
-  installSettingsSection(ctx, WEB_SEARCH_SETTINGS_NAMESPACE, Config, config, {
+  installWebSearchSettings(ctx, config, {
     setSource: (source) => {
       current = source
     },

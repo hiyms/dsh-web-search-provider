@@ -9,12 +9,12 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { builtinProviders, getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import type { BuiltinProvider } from '@earendil-works/pi-ai/providers/all'
 
 /** Settings namespace of the harness's pi-ai LLM adapter (its `providers` dict). */
-const LLM_PI_AI_NAMESPACE = settingsNamespace('llm-pi-ai')
+const LLM_PI_AI_NAMESPACE = 'llm-pi-ai' as SettingsNamespace
 
 /** The resolved chat-route facts this package consumes. */
 export interface CurrentChatRoute {
