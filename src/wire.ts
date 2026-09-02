@@ -22,7 +22,7 @@ import { abortedFinish, classifyHttpStatus, classifyWireError, errorFinish, pars
 import { abortable } from './http.ts'
 import { mapUsage } from './usage.ts'
 import type { WireUsage } from './usage.ts'
-import { buildWireBody } from './serialize.ts'
+import { buildWireBody, flattenText } from './serialize.ts'
 import { parseSse } from './sse.ts'
 import { IdleWatchdog } from './watchdog.ts'
 import type { InlineConfig } from './config.ts'
@@ -30,6 +30,9 @@ import { inlineAnthropicStream } from './wire-anthropic.ts'
 
 /** Path appended to the endpoint base. */
 const RESPONSES_ENDPOINT = '/responses'
+
+/** Marker emitted by DSH when a sandboxed tool call is denied file access. */
+const SANDBOX_DENIAL_MARKER = '[sandbox: file access denied under'
 
 /** Credential and cancellation hooks the stream resolves per operation. */
 export interface InlineHooks {
@@ -54,6 +57,39 @@ interface Slot {
 /** Whether any message carries image content (unsupported on this wire). */
 export function contentHasImages(request: GenerateOptions): boolean {
   return request.messages.some(message => message.content.some(block => block.type === 'image'))
+}
+
+/**
+ * Whether the current turn is a retry immediately following a real DSH
+ * sandbox denial.
+ */
+function hasGroundedSandboxEscalation(request: GenerateOptions): boolean {
+  const last = request.messages.at(-1)
+  if (last?.role !== 'user') return false
+  return last.content.some(block =>
+    block.type === 'tool-result'
+    && flattenText(block.content).includes(SANDBOX_DENIAL_MARKER),
+  )
+}
+
+/**
+ * Strip speculative sandbox escalation fields while preserving sanctioned
+ * retries grounded in the immediately preceding tool result.
+ */
+function sanitizeSandboxEscalationArguments(argumentsText: string, grounded: boolean): string {
+  if (grounded) return argumentsText
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(argumentsText)
+  } catch {
+    return argumentsText
+  }
+  if (typeof parsed !== 'object' || parsed === null) return argumentsText
+  const args = parsed as Record<string, unknown>
+  if (!('sandbox_permissions' in args) && !('justification' in args)) return argumentsText
+  delete args.sandbox_permissions
+  delete args.justification
+  return JSON.stringify(args)
 }
 
 /**
@@ -122,6 +158,7 @@ export async function* inlineStream(
   const controller = new AbortController()
   const onAbort = (): void => controller.abort()
   request.signal?.addEventListener('abort', onAbort, { once: true })
+  const groundedSandboxEscalation = hasGroundedSandboxEscalation(request)
   let watchdog: IdleWatchdog | undefined
   try {
     if (request.signal?.aborted ?? false) {
@@ -212,7 +249,16 @@ export async function* inlineStream(
         if (slot === undefined) continue
         open.delete(outputIndex)
         if (slot.blockType === 'tool-call') {
-          yield { type: 'block-end', index: slot.index, block: { type: 'tool-call', id: slot.id as CallId, name: slot.name ?? '', arguments: slot.arguments } }
+          yield {
+            type: 'block-end',
+            index: slot.index,
+            block: {
+              type: 'tool-call',
+              id: slot.id as CallId,
+              name: slot.name ?? '',
+              arguments: sanitizeSandboxEscalationArguments(slot.arguments, groundedSandboxEscalation),
+            },
+          }
         } else if (slot.blockType === 'reasoning') {
           yield { type: 'block-end', index: slot.index, block: { type: 'reasoning', text: slot.text } }
         } else {
@@ -316,7 +362,10 @@ export async function* inlineStream(
                   type: 'tool-call',
                   id: slot.id as CallId,
                   name: item?.name ?? slot.name ?? '',
-                  arguments: item?.arguments ?? slot.arguments,
+                  arguments: sanitizeSandboxEscalationArguments(
+                    item?.arguments ?? slot.arguments,
+                    groundedSandboxEscalation,
+                  ),
                 },
               }
             } else if (slot.blockType === 'reasoning') {

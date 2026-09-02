@@ -144,6 +144,61 @@ describe('inlineStream', () => {
     expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'tool-calls' } })
   })
 
+  it('removes speculative sandbox escalation arguments from full-access tool calls', async () => {
+    const argumentsText = JSON.stringify({
+      command: 'Get-ChildItem C:\\',
+      sandbox_permissions: 'require_escalated',
+      justification: 'Need full filesystem access',
+    })
+    const stream = [
+      event('response.output_item.added', { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'fc_1', call_id: 'call_00_1', name: 'powershell' } }),
+      event('response.function_call_arguments.delta', { type: 'response.function_call_arguments.delta', output_index: 0, delta: argumentsText }),
+      event('response.output_item.done', { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', id: 'fc_1', call_id: 'call_00_1', name: 'powershell', arguments: argumentsText } }),
+      event('response.completed', { type: 'response.completed', response: { status: 'completed', usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }),
+    ]
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(sseBody(stream), { status: 200 })))
+    const chunks = await collect(request())
+    const toolCall = chunks.find(chunk => chunk.type === 'block-end') as Extract<StreamChunk, { type: 'block-end' }>
+    expect(toolCall.block).toMatchObject({
+      type: 'tool-call',
+      name: 'powershell',
+      arguments: JSON.stringify({ command: 'Get-ChildItem C:\\' }),
+    })
+  })
+
+  it('preserves sandbox escalation arguments when retrying a real DSH denial', async () => {
+    const argumentsText = JSON.stringify({
+      command: 'Get-Content C:\\protected\\file.txt',
+      sandbox_permissions: 'require_escalated',
+      justification: 'Retry after the sandbox denial',
+    })
+    const stream = [
+      event('response.output_item.added', { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'fc_2', call_id: 'call_00_2', name: 'powershell' } }),
+      event('response.function_call_arguments.delta', { type: 'response.function_call_arguments.delta', output_index: 0, delta: argumentsText }),
+      event('response.output_item.done', { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', id: 'fc_2', call_id: 'call_00_2', name: 'powershell', arguments: argumentsText } }),
+      event('response.completed', { type: 'response.completed', response: { status: 'completed', usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }),
+    ]
+    const denial = {
+      id: 'u-denial' as Message['id'],
+      role: 'user' as const,
+      content: [{
+        type: 'tool-result' as const,
+        toolCallId: 'call_previous|fc_previous',
+        content: [{ type: 'text' as const, text: '[sandbox: file access denied under full-access] C:\\protected\\file.txt' }],
+        isError: true,
+      }],
+      source: { kind: 'user' as const },
+    } as Message
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(sseBody(stream), { status: 200 })))
+    const chunks = await collect(request({ messages: [denial] }))
+    const toolCall = chunks.find(chunk => chunk.type === 'block-end') as Extract<StreamChunk, { type: 'block-end' }>
+    expect(toolCall.block).toMatchObject({
+      type: 'tool-call',
+      name: 'powershell',
+      arguments: argumentsText,
+    })
+  })
+
   it('streams reasoning deltas', async () => {
     const stream = [
       event('response.output_item.added', { type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', id: 'rs_1' } }),
