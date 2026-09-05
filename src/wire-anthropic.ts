@@ -10,8 +10,8 @@
  * @module dsh-web-search-provider/wire-anthropic
  */
 
-import type { CallId, GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
-import { attributionHeaders } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
+import { attributionHeaders, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { SearchPlanCandidate } from './plan.ts'
 import { abortedFinish, classifyHttpStatus, classifyWireError, errorFinish, parseRetryAfterMs } from './failure.ts'
 import { abortable } from './http.ts'
@@ -175,7 +175,7 @@ export async function* inlineAnthropicStream(
     const closeOpenSlots = function* (): Generator<StreamChunk> {
       for (const [streamIndex, slot] of slots) {
         if (slot.blockType === 'tool-call') {
-          yield { type: 'block-end', index: slot.index, block: { type: 'tool-call', id: slot.id as CallId, name: slot.name ?? '', arguments: slot.arguments } }
+          yield { type: 'block-end', index: slot.index, block: { type: 'tool-call', id: ToolCallId(slot.id ?? 'tool'), name: slot.name ?? '', arguments: slot.arguments } }
         } else if (slot.blockType === 'reasoning') {
           yield { type: 'block-end', index: slot.index, block: { type: 'reasoning', text: slot.text } }
         }
@@ -260,7 +260,7 @@ export async function* inlineAnthropicStream(
               const json = data.delta?.partial_json ?? ''
               if (json.length === 0) break
               slot.arguments += json
-              yield { type: 'tool-call-delta', index: slot.index, id: slot.id as CallId, name: slot.name, argumentsDelta: json }
+              yield { type: 'tool-call-delta', index: slot.index, id: ToolCallId(slot.id ?? 'tool'), name: slot.name, argumentsDelta: json }
             }
             // signature_delta: ignored (no harness reasoning signature).
             break
@@ -269,7 +269,7 @@ export async function* inlineAnthropicStream(
             const slot = slots.get(data.index ?? -1)
             if (slot === undefined) break
             if (slot.blockType === 'tool-call') {
-              yield { type: 'block-end', index: slot.index, block: { type: 'tool-call', id: slot.id as CallId, name: slot.name ?? '', arguments: slot.arguments } }
+              yield { type: 'block-end', index: slot.index, block: { type: 'tool-call', id: ToolCallId(slot.id ?? 'tool'), name: slot.name ?? '', arguments: slot.arguments } }
             } else if (slot.blockType === 'reasoning') {
               yield { type: 'block-end', index: slot.index, block: { type: 'reasoning', text: slot.text } }
             }

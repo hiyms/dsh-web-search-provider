@@ -40,21 +40,31 @@ interface FakeSettings {
 
 function fakeSettings(document: Record<string, unknown>): FakeSettings {
   const watchers = new Map<string, () => void>()
+  const register = (ns: unknown, schema: (value: unknown) => unknown, options?: { base?: unknown }) => {
+    const namespace = String(ns)
+    return {
+      // Re-resolve on every read so a mutated document is visible to the
+      // source thunk after a committed change.
+      get: () => schema({ ...options?.base, ...document[namespace] }),
+      watch: (callback: () => void) => {
+        watchers.set(namespace, callback)
+        return () => { watchers.delete(namespace) }
+      },
+      update: async () => undefined,
+      replace: async () => undefined,
+    }
+  }
   const settings = {
     get: (ns: unknown) => document[String(ns)],
-    register: (ns: unknown, schema: (value: unknown) => unknown, options?: { base?: unknown }) => {
-      const namespace = String(ns)
-      return {
-        // Re-resolve on every read so a mutated document is visible to the
-        // source thunk after a committed change.
-        get: () => schema({ ...options?.base, ...document[namespace] }),
-        watch: (callback: () => void) => {
-          watchers.set(namespace, callback)
-          return () => { watchers.delete(namespace) }
-        },
-        update: async () => undefined,
-        replace: async () => undefined,
-      }
+    register,
+    installSection: (_owner: Context, ns: unknown, schema: (value: unknown) => unknown, entry: unknown, hooks: {
+      setSource(current: () => unknown): void
+      onChange(): void
+    }) => {
+      const scope = register(ns, schema, { base: entry })
+      hooks.setSource(scope.get)
+      scope.watch(hooks.onChange)
+      hooks.onChange()
     },
   }
   return { settings, triggerChange: (ns) => watchers.get(ns)?.() }
@@ -124,8 +134,8 @@ function buildRuntime(
       return () => { if (typeof disposer === 'function') disposer() }
     },
   }
-  // Attach store entries as context properties so services like
-  // installSettingsSection can access them as `sctx.settings`.
+  // Attach store entries as context properties so the RC1 settings service
+  // can be consumed through `ctx.settings.installSection(...)`.
   for (const [name, service] of store) (ctx as Record<string, unknown>)[name] = service
   // `listener` must be a live binding: it is assigned by ctx.on when apply
   // runs, after this object is constructed, so a snapshot would stay undefined.
