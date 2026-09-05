@@ -14,7 +14,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { isAgentLoopRequest } from '@deepseek-ai/dsh-llm'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/dsh-settings'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { resolveCandidates, sameCandidates, SearchPlan } from './plan.ts'
 import type { PlanConfig, SearchPlanCandidate } from './plan.ts'
@@ -34,7 +34,7 @@ export const name = 'web-search-provider'
 export const inject = ['llm', 'systemPrompt', 'settings', 'credentials']
 
 /** Settings namespace carrying this plugin's section. */
-export const WEB_SEARCH_SETTINGS_NAMESPACE = settingsNamespace('web-search-provider')
+export const WEB_SEARCH_SETTINGS_NAMESPACE = 'web-search-provider'
 
 /** Schema of the plugin's settings section, exported for composition consumers. */
 export { Config } from './config.ts'
@@ -91,7 +91,7 @@ export function apply(ctx: Context, config: InlineConfig): void {
     return currentPlan
   }
 
-  installSettingsSection(ctx, WEB_SEARCH_SETTINGS_NAMESPACE, Config, config, {
+  ctx.settings.installSection(ctx, WEB_SEARCH_SETTINGS_NAMESPACE, Config, config, {
     setSource: (source) => {
       current = source
     },

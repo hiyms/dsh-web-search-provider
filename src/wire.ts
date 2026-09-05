@@ -14,8 +14,8 @@
  * @module dsh-web-search-provider/wire
  */
 
-import type { CallId, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { attributionHeaders } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { attributionHeaders, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { SearchPlan, SearchPlanCandidate } from './plan.ts'
 import { WEB_SEARCH_TOOL_TYPE } from './plan.ts'
 import { abortedFinish, classifyHttpStatus, classifyWireError, errorFinish, parseRetryAfterMs } from './failure.ts'
@@ -212,7 +212,7 @@ export async function* inlineStream(
         if (slot === undefined) continue
         open.delete(outputIndex)
         if (slot.blockType === 'tool-call') {
-          yield { type: 'block-end', index: slot.index, block: { type: 'tool-call', id: slot.id as CallId, name: slot.name ?? '', arguments: slot.arguments } }
+          yield { type: 'block-end', index: slot.index, block: { type: 'tool-call', id: ToolCallId(slot.id ?? 'tool'), name: slot.name ?? '', arguments: slot.arguments } }
         } else if (slot.blockType === 'reasoning') {
           yield { type: 'block-end', index: slot.index, block: { type: 'reasoning', text: slot.text } }
         } else {
@@ -297,7 +297,7 @@ export async function* inlineStream(
             const delta = data.delta ?? ''
             if (delta.length === 0) break
             slot.arguments += delta
-            yield { type: 'tool-call-delta', index: slot.index, id: slot.id as CallId, name: slot.name, argumentsDelta: delta }
+            yield { type: 'tool-call-delta', index: slot.index, id: ToolCallId(slot.id ?? 'tool'), name: slot.name, argumentsDelta: delta }
             break
           }
           case 'response.output_item.done': {
@@ -314,7 +314,7 @@ export async function* inlineStream(
                 index: slot.index,
                 block: {
                   type: 'tool-call',
-                  id: slot.id as CallId,
+                  id: ToolCallId(slot.id ?? 'tool'),
                   name: item?.name ?? slot.name ?? '',
                   arguments: item?.arguments ?? slot.arguments,
                 },

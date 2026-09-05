@@ -2,6 +2,8 @@
 
 [![npm version](https://img.shields.io/npm/v/dsh-web-search-provider)](https://www.npmjs.com/package/dsh-web-search-provider)
 
+Requires DeepSeek Harness `0.1.2-rc.1` or newer within the `0.1.2` release line.
+
 [简体中文](./README.zh.md)
 
 Network search support for the Deepseek Harness, powered by the model provider's server-side capability.

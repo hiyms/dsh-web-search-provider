@@ -2,6 +2,8 @@
 
 [![npm version](https://img.shields.io/npm/v/dsh-web-search-provider)](https://www.npmjs.com/package/dsh-web-search-provider)
 
+要求 DeepSeek Harness `0.1.2-rc.1` 或 `0.1.2` 发布线内的更新版本。
+
 为 Deepseek Harness 引入基于模型供应方服务器能力的**网络搜索支持**。
 
 本插件使用时要求模型供应方使用 **OpenAI Responses API** 或 **Anthropic 兼容 Messages API** ，**同时提供网络搜索能力**。
